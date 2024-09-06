@@ -1,0 +1,7 @@
+pandas
+requests
+sqlalchemy
+psycopg2
+pymongo
+dbt 
+great_expectations
