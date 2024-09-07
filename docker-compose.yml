@@ -50,6 +50,8 @@ services:
       - "10001:10001"
     command: >
       azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+    environment:
+      AZURITE_ACCOUNTS: "${AZURITE_ACCOUNTS}"
     volumes:
       - azurite_data:/data
 
