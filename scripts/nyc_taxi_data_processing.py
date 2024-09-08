@@ -2,7 +2,7 @@ import os
 import logging
 from tqdm import tqdm
 from io import BytesIO
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from dotenv import load_dotenv
 import pandas as pd
 import re
@@ -67,41 +67,62 @@ def process_parquet_data(parquet_data, blob_name, columns):
 
         logging.info(f"Processed {blob_name} - new shape: {parquet_df.shape}")
 
-        # Save the processed data to a local folder
-        output_dir = 'processed_data'
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        output_filename = f"{output_dir}/processed_{blob_name.replace('.parquet', '')}.parquet"
-        parquet_df.to_parquet(output_filename)
-        logging.info(f"Saved processed data to local file: {output_filename}")
-
-        return output_filename
+        return parquet_df
 
     except Exception as e:
         logging.error(f"Failed to process {blob_name}: {e}")
         return None
 
-# Main function to fetch data from Azurite, process it, and save locally
+# Function to upload processed data to Azurite Blob Storage
+def upload_to_azurite(processed_df, container_client, blob_name):
+    try:
+        logging.info(f"Uploading processed data to Azurite Blob Storage: {blob_name}")
+        
+        # Convert DataFrame to bytes
+        output = BytesIO()
+        processed_df.to_parquet(output)
+        output.seek(0)
+
+        # Upload data to Azurite
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(output, overwrite=True)
+        logging.info(f"Successfully uploaded {blob_name} to Azurite")
+    except Exception as e:
+        logging.error(f"Failed to upload {blob_name} to Azurite: {e}")
+
+# Main function to fetch data from Azurite, process it, and save in Azurite
 def main():
     # Load Azurite connection string from .env file
     connect_str = os.getenv("AZURITE_CONNECTION_STRING")
-    container_name = "taxirawdata"
+    raw_container_name = "taxirawdata"
+    processed_container_name = "processedtaxidata"
 
-    # Create blob service client and container client
+    # Create blob service client
     blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-    container_client = blob_service_client.get_container_client(container_name)
+    
+    # Create container client for raw data
+    raw_container_client = blob_service_client.get_container_client(raw_container_name)
 
-    # List all blobs in the container
-    blobs_list = list(container_client.list_blobs())
+    # Create or get container client for processed data
+    try:
+        processed_container_client = blob_service_client.create_container(processed_container_name)
+        logging.info(f"Created container: {processed_container_name}")
+    except Exception as e:
+        if "ContainerAlreadyExists" in str(e):
+            processed_container_client = blob_service_client.get_container_client(processed_container_name)
+            logging.info(f"Container '{processed_container_name}' already exists.")
+        else:
+            logging.error(f"Failed to create or get container: {processed_container_name} - {e}")
+            return
+
+    # List all blobs in the raw data container
+    blobs_list = list(raw_container_client.list_blobs())
 
     print("Fetching and processing data from Azurite...")
 
     # Create a progress bar for tracking the download process
     total_files = len(blobs_list)
     progress_bar = tqdm(total=total_files, desc="Total Progress", unit="file")
-
-    processed_files = []
 
     # Define columns for yellow and green taxi datasets
     yellow_columns = ['VendorID', 'tpep_pickup_datetime', 'tpep_dropoff_datetime', 'passenger_count', 'trip_distance', 'RatecodeID', 'store_and_fwd_flag', 'PULocationID', 'DOLocationID', 'payment_type', 'fare_amount', 'extra', 'mta_tax', 'tip_amount', 'tolls_amount', 'improvement_surcharge', 'total_amount', 'congestion_surcharge', 'airport_fee']
@@ -112,23 +133,20 @@ def main():
         blob_name = blob.name
         columns = yellow_columns if 'yellow' in blob_name else green_columns
 
-        # Fetch  data from Azurite
-        parquet_data = fetch_from_azurite(container_client, blob_name)
+        # Fetch data from Azurite
+        parquet_data = fetch_from_azurite(raw_container_client, blob_name)
         if parquet_data:
-            # Process the fetched data and save locally
-            processed_file = process_parquet_data(parquet_data, blob_name, columns)
-            if processed_file:
-                processed_files.append(processed_file)
+            # Process the fetched data
+            processed_df = process_parquet_data(parquet_data, blob_name, columns)
+            if processed_df is not None:
+                # Upload the processed data back to Azurite
+                processed_blob_name = f"processed_{blob_name}"
+                upload_to_azurite(processed_df, processed_container_client, processed_blob_name)
 
         # Update the progress bar
         progress_bar.update(1)
 
-    # Checks if all files were processed
-    if len(processed_files) == total_files:
-        print(f"Processing completed for all {len(processed_files)} files.")
-    else:
-        print(f"Warning: Processed {len(processed_files)} files, but expected {total_files}.")
-
+    print(f"Processing completed for {total_files} files.")
     progress_bar.close()
 
 if __name__ == "__main__":
