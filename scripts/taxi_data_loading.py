@@ -5,15 +5,15 @@ from io import BytesIO
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 import psycopg2
-from psycopg2 import sql, extras
+from psycopg2 import sql
+from psycopg2.extras import execute_values  # Import extras module for batch inserts
 from tqdm import tqdm
-from time import time
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(filename='load_to_postgresql.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename='load_to_postgresql.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # PostgreSQL connection parameters
 PG_HOST = os.getenv("POSTGRES_HOST")
@@ -30,8 +30,7 @@ def connect_postgresql():
             port=PG_PORT,
             user=PG_USER,
             password=PG_PASSWORD,
-            dbname=PG_DATABASE,
-            connect_timeout=10  # Timeout for slow connections
+            dbname=PG_DATABASE
         )
         return connection
     except Exception as e:
@@ -54,45 +53,67 @@ def create_table_if_not_exists(connection, table_name, create_table_sql):
     finally:
         cursor.close()
 
-# Function to bulk load data into PostgreSQL
-def load_data_to_postgresql(df, table_name):
+# Function to drop the yellow_taxi_data table
+def drop_table(connection, table_name):
+    try:
+        cursor = connection.cursor()
+        cursor.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(table_name)))
+        connection.commit()
+        logging.info(f"Table {table_name} dropped.")
+    except Exception as e:
+        logging.error(f"Failed to drop table {table_name}: {e}")
+    finally:
+        cursor.close()
+
+# Function to check if data already exists
+def check_if_data_exists(connection, table_name):
+    try:
+        cursor = connection.cursor()
+        cursor.execute(sql.SQL("SELECT COUNT(1) FROM {}").format(sql.Identifier(table_name)))
+        count = cursor.fetchone()[0]
+        cursor.close()
+        return count > 0
+    except Exception as e:
+        logging.error(f"Failed to check data in table {table_name}: {e}")
+        return False
+
+# Function to load data into PostgreSQL in batches
+def load_data_to_postgresql(df, table_name, batch_size=5000):
     connection = None
-    
     try:
         # Convert DataFrame column names to lowercase to match PostgreSQL's case-insensitive column names
         df.columns = map(str.lower, df.columns)
 
-        # Handle NaN values and convert data types to match PostgreSQL types
-        df = df.fillna(value={'passenger_count': 0, 'ratecodeid': 0, 'trip_type': 0, 'payment_type': 0, 'congestion_surcharge': 0, 'airport_fee': 0})
-        df['passenger_count'] = df['passenger_count'].astype(int)
-        df['payment_type'] = df['payment_type'].astype(int)
-        df['trip_type'] = df['trip_type'].astype(int)
-        df['ratecodeid'] = df['ratecodeid'].astype(int)
+        # Ensure the columns for float data types are explicitly cast to float64 in pandas
+        float_columns = ['trip_distance', 'fare_amount', 'extra', 'mta_tax', 'tip_amount', 
+                         'tolls_amount', 'improvement_surcharge', 'total_amount', 'congestion_surcharge', 'airport_fee']
+        df[float_columns] = df[float_columns].astype('float64')
 
         # Connect to PostgreSQL
         connection = connect_postgresql()
         if connection:
             cursor = connection.cursor()
 
-            # Bulk insert data using psycopg2.extras.execute_batch for efficiency
-            insert_query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
-                sql.Identifier(table_name),
-                sql.SQL(', ').join(map(sql.Identifier, df.columns)),
-                sql.SQL(', ').join(sql.Placeholder() * len(df.columns))
-            )
-            
-            # Log the start of the bulk insert
-            start_time = time()
-            extras.execute_batch(cursor, insert_query.as_string(connection), df.values)
-            logging.info(f"Bulk inserted {len(df)} rows into {table_name} in {time() - start_time} seconds.")
+            # Insert data into PostgreSQL in batches
+            for i in tqdm(range(0, len(df), batch_size), desc=f"Inserting data into {table_name}"):
+                batch_df = df.iloc[i:i+batch_size]
+                rows = [tuple(row) for row in batch_df.values]
+                insert_query = sql.SQL("INSERT INTO {} ({}) VALUES %s").format(
+                    sql.Identifier(table_name),
+                    sql.SQL(', ').join(map(sql.Identifier, batch_df.columns))
+                )
+                execute_values(cursor, insert_query, rows)
+                connection.commit()
 
-            connection.commit()
+            logging.info(f"Data loaded into table {table_name}.")
         else:
             logging.error(f"Failed to connect to PostgreSQL.")
-    
+            exit(1)  # Exit the script with an error code
+
     except Exception as e:
         logging.error(f"Failed to load data into PostgreSQL: {e}")
-    
+        exit(1)  # Exit the script with an error code
+
     finally:
         if connection:
             connection.close()
@@ -110,33 +131,9 @@ def main():
     # List all blobs in the container
     blobs_list = list(container_client.list_blobs())
 
-    logging.info("Loading data from Azurite to PostgreSQL...")
+    print("Loading data from Azurite to PostgreSQL...")
 
-    # PostgreSQL table creation SQL
-    yellow_table_create_sql = """
-    CREATE TABLE IF NOT EXISTS yellow_taxi_data (
-        vendorid INT,
-        tpep_pickup_datetime TIMESTAMP,
-        tpep_dropoff_datetime TIMESTAMP,
-        passenger_count INT,
-        trip_distance REAL,
-        ratecodeid INT,
-        store_and_fwd_flag CHAR(1),
-        pulocationid INT,
-        dolocationid INT,
-        payment_type INT,
-        fare_amount REAL,
-        extra REAL,
-        mta_tax REAL,
-        tip_amount REAL,
-        tolls_amount REAL,
-        improvement_surcharge REAL,
-        total_amount REAL,
-        congestion_surcharge REAL,
-        airport_fee REAL
-    );
-    """
-
+    # PostgreSQL table creation SQL for green taxi data only
     green_table_create_sql = """
     CREATE TABLE IF NOT EXISTS green_taxi_data (
         vendorid INT,
@@ -147,58 +144,67 @@ def main():
         pulocationid INT,
         dolocationid INT,
         passenger_count INT,
-        trip_distance REAL,
-        fare_amount REAL,
-        extra REAL,
-        mta_tax REAL,
-        tip_amount REAL,
-        tolls_amount REAL,
-        ehail_fee REAL,
-        improvement_surcharge REAL,
-        total_amount REAL,
+        trip_distance FLOAT,
+        fare_amount FLOAT,
+        extra FLOAT,
+        mta_tax FLOAT,
+        tip_amount FLOAT,
+        tolls_amount FLOAT,
+        ehail_fee FLOAT,
+        improvement_surcharge FLOAT,
+        total_amount FLOAT,
         payment_type INT,
         trip_type INT,
-        congestion_surcharge REAL
+        congestion_surcharge FLOAT
     );
     """
 
     # Connect to PostgreSQL
     connection = connect_postgresql()
     if connection:
-        # Create tables if not exists
-        create_table_if_not_exists(connection, 'yellow_taxi_data', yellow_table_create_sql)
+        # Drop yellow_taxi_data table if it exists
+        drop_table(connection, 'yellow_taxi_data')
+
+        # Create green_taxi_data table if not exists
         create_table_if_not_exists(connection, 'green_taxi_data', green_table_create_sql)
-        
+
+        # Check if green taxi data is already loaded
+        green_data_exists = check_if_data_exists(connection, 'green_taxi_data')
+
         # Loop over blobs and load data based on file type
         for blob in tqdm(blobs_list, desc="Loading blobs", unit="blob"):
             blob_name = blob.name
 
-            try:
-                # Log the start of downloading the blob
-                logging.info(f"Downloading blob {blob_name}")
-                start_time = time()
+            # Download blob data
+            blob_client = container_client.get_blob_client(blob_name)
+            blob_data = blob_client.download_blob()
+            df = pd.read_parquet(BytesIO(blob_data.readall()))
 
-                # Download blob data
-                blob_client = container_client.get_blob_client(blob_name)
-                blob_data = blob_client.download_blob()
-                df = pd.read_parquet(BytesIO(blob_data.readall()))
+            # Log progress
+            logging.info(f"Processing blob: {blob_name}")
 
-                # Log the time taken to download and read the blob
-                logging.info(f"Downloaded and read {blob_name} in {time() - start_time} seconds.")
+            # Load green taxi data only if not already loaded
+            if 'green' in blob_name and not green_data_exists:
+                logging.info("Loading green taxi data...")
+                load_data_to_postgresql(df, 'green_taxi_data')
 
-                # Load and process data into PostgreSQL
-                if 'yellow' in blob_name:
-                    load_data_to_postgresql(df, 'yellow_taxi_data')
-                elif 'green' in blob_name:
-                    load_data_to_postgresql(df, 'green_taxi_data')
-
-            except Exception as e:
-                logging.error(f"Error processing blob {blob_name}: {e}")
-
+        logging.info("All blobs processed.")
     else:
         logging.error("Failed to connect to PostgreSQL.")
+        exit(1)  # Exit the script with an error code
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
 
 
