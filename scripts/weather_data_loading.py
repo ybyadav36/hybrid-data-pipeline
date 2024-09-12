@@ -1,7 +1,7 @@
 import os
 import logging
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 from dotenv import load_dotenv
@@ -29,7 +29,7 @@ def get_postgres_connection_string():
     password = os.getenv("POSTGRES_PASSWORD")
     host = os.getenv("POSTGRES_HOST")
     port = os.getenv("POSTGRES_PORT")
-    db = os.getenv("POSTGRES_DB")
+    db = os.getenv("POSTGRES_WEATHER_DB")
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 # Function to create PostgreSQL table if not exists
@@ -45,7 +45,7 @@ def create_table(engine):
     );
     """
     with engine.connect() as connection:
-        connection.execute(create_table_sql)
+        connection.execute(text(create_table_sql))
     logging.info("Table 'historical_weather_data' created or already exists.")
 
 # Function to load data from Parquet files to PostgreSQL
@@ -92,3 +92,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
