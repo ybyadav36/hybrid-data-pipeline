@@ -49,7 +49,7 @@ STATE_COORDINATES = {
     'Jammu and Kashmir': (33.7782, 76.5762)
 }
 
-YEARS = [2023, 2024]  
+YEARS = [2020,2021,2022,2023, 2024]  
 
 # Function to fetch weather data from NASA POWER API
 def fetch_nasa_power_data(latitude, longitude, years):
