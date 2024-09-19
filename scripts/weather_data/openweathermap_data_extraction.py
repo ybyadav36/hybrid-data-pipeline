@@ -76,10 +76,14 @@ def fetch_openweather_data(state, latitude, longitude):
         response = requests.get(base_url, params=params)
         response.raise_for_status()  # Raise an exception for HTTP errors
         data = response.json()
+        
+        # Extract relevant weather data including min and max temperature
         return {
             "datetime": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
             "state": state,
             "temperature": data.get("main", {}).get("temp", None),
+            "min_temperature": data.get("main", {}).get("temp_min", None),  # Min temperature
+            "max_temperature": data.get("main", {}).get("temp_max", None),  # Max temperature
             "humidity": data.get("main", {}).get("humidity", None),
             "weather": data.get("weather", [{}])[0].get("description", None),
             "wind_speed": data.get("wind", {}).get("speed", None)
@@ -109,7 +113,7 @@ def fetch_and_send_weather_data():
                 print(f"No weather data available for {state}")
         
         print("Waiting for 5 minutes before fetching again...")
-        time.sleep(300)  # Wait for 5 minutes
+        time.sleep(60)  # Wait for 1 minutes
 
 # Run the script
 if __name__ == "__main__":
