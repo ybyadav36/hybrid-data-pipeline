@@ -1,4 +1,54 @@
+# Python files and virtual environments
 venv/
+*.pyc
 __pycache__/
+*.pyo
+*.pyd
+
+# Logs and databases
 *.log
+*.sqlite3
+*.sql
+
+# Environment variables and secrets
+.env
+.env.*
+docker/postgres/.env
+docker/pgadmin/.env
+Dockerfile*
+Dockerfile
+# Docker files
+docker-compose.override.yml
+docker-compose.override.*.yml
+docker-compose.override.yaml
+docker-compose.override.*.yaml
+
+# PostgreSQL & MongoDB data volumes
+docker/postgres/
+volumes/
+postgres_data/
+mongo_data/
+azurite_data/
+pgadmin_data/
+
+# Generated files and directories
+*.csv
+*.parquet
 data/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Docker specific files
+*.pid
+logs/
+tmp/
+
+# VSCode and other editor-specific files
+.vscode/
+.idea/
+
+# Jupyter notebook checkpoints (if you're using Jupyter)
+.ipynb_checkpoints/
+

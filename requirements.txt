@@ -5,3 +5,15 @@ psycopg2
 pymongo
 dbt 
 great_expectations
+pyspark 
+pyarrow
+requests
+beautifulsoup4
+tqdm
+urllib3
+azure-storage-blob
+kafka
+confluent-kafka
+kafka-python
+yfinance
+pyarrow
